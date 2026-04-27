@@ -280,7 +280,7 @@ def train_target_pendulum(target_angle, seed, num_steps=50000, random_steps=5000
     # Store evaluation metrics: format [(step, mean_reward), ...]
     eval_metrics = []
     
-    for step in range(1, num_steps + 1):
+    for step in range(0, num_steps + 1):
         if step <= random_steps:
             action = env.action_space.sample()
             scaled_action = action / max_action
