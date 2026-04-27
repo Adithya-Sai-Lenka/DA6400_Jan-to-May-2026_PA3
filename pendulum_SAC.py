@@ -7,6 +7,22 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 import gymnasium as gym
 
+import concurrent.futures
+import multiprocessing as mp
+
+def set_seed(seed):
+    """Enforces reproducibility across all libraries."""
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
 # ==========================================
 # 1. NETWORKS & REPARAMETERIZATION TRICK
 # ==========================================
@@ -52,9 +68,15 @@ class SquashedGaussianActor(nn.Module):
         self.log_std_layer = nn.Linear(hidden_dim, action_dim)
         self.apply(weight_init)
 
-    def forward(self, obs):
+    def forward(self, obs, deterministic=False):
         x = self.net(obs)
         mu = self.mu_layer(x)
+        
+        # --- Evaluation Mode (No Exploration) ---
+        if deterministic:
+            return torch.tanh(mu), None
+        # ---------------------------------------------
+
         log_std = self.log_std_layer(x)
         log_std = torch.clamp(log_std, self.log_std_bounds[0], self.log_std_bounds[1])
         std = log_std.exp()
@@ -77,11 +99,15 @@ class SquashedGaussianActor(nn.Module):
 # ==========================================
 
 class SACAgent:
-    def __init__(self, obs_dim, action_dim, device, gamma=0.99, tau=0.005, alpha=0.2, lr=3e-4):
+    def __init__(self, obs_dim, action_dim, device, gamma=0.99, tau=0.005, lr=3e-4):
         self.device = device
         self.gamma = gamma
         self.tau = tau
-        self.alpha = alpha
+        
+        ## Automated Temperature Tuning Setup
+        self.target_entropy = -action_dim 
+        self.log_alpha = torch.zeros(1, requires_grad=True, device=device)
+        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
 
         self.actor = SquashedGaussianActor(obs_dim, action_dim).to(device)
         self.critic = DoubleQCritic(obs_dim, action_dim).to(device)
@@ -92,10 +118,15 @@ class SACAgent:
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
-    def select_action(self, obs):
+    @property
+    def alpha(self):
+        """Dynamically fetch the current temperature value"""
+        return self.log_alpha.exp().detach()
+    
+    def select_action(self, obs, deterministic=False):
         obs = torch.FloatTensor(obs).to(self.device).unsqueeze(0)
         with torch.no_grad():
-            action, _ = self.actor(obs)
+            action, _ = self.actor(obs, deterministic=deterministic)
         return action.cpu().numpy()[0]
 
     def update(self, replay_buffer, batch_size=256):
@@ -128,16 +159,24 @@ class SACAgent:
         actor_loss.backward()
         self.actor_optimizer.step()
 
+        ## TEMPERATURE UPDATE (Automated Tuning)
+        alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
+
+        self.alpha_optimizer.zero_grad()
+        alpha_loss.backward()
+        self.alpha_optimizer.step()
+
+
         # SOFT UPDATE TARGET NETWORKS
         for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
             target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
 # ==========================================
-# 3. UTILITIES & REPLAY BUFFER
+# 3. UTILITIES & ENVIRONMENT WRAPPER
 # ==========================================
 
 class ReplayBuffer:
-    def __init__(self, obs_dim, action_dim, capacity=1000000, device='cpu'):
+    def __init__(self, obs_dim, action_dim, capacity=100000, device='cpu'):
         self.obses = np.empty((capacity, obs_dim), dtype=np.float32)
         self.next_obses = np.empty((capacity, obs_dim), dtype=np.float32)
         self.actions = np.empty((capacity, action_dim), dtype=np.float32)
@@ -167,66 +206,171 @@ class ReplayBuffer:
             torch.as_tensor(self.not_dones[idxs], device=self.device)
         )
 
-def get_env(env_id):
-    """Instantiate the correct environment wrapper based on task"""
-    if env_id == "pendulum":
-        return gym.make("Pendulum-v1")
-    elif env_id == "lunar_lander":
-        return gym.make("LunarLander-v3", continuous=True)
-    elif env_id == "reacher_easy":
-        # Requires shimmy[dm-control]
-        return gym.make("dm_control/reacher-easy-v0")
-    elif env_id == "reacher_hard":
-        return gym.make("dm_control/reacher-hard-v0")
-    else:
-        raise ValueError("Invalid environment specified.")
+class TargetPendulumWrapper(gym.Wrapper):
+    """Modifies Pendulum-v1 to target a specific angle."""
+    def __init__(self, env, target_angle_deg):
+        super().__init__(env)
+        self.target_theta = np.deg2rad(target_angle_deg)
+
+    def step(self, action):
+        obs, _, terminated, truncated, info = self.env.step(action)
+        
+        # obs = [cos(theta), sin(theta), theta_dot]
+        cos_th, sin_th, th_dot = obs
+        current_theta = np.arctan2(sin_th, cos_th)
+        
+        # Calculate angular error wrapped to [-pi, pi]
+        diff = current_theta - self.target_theta
+        angle_err = ((diff + np.pi) % (2 * np.pi)) - np.pi
+        
+        # Extract torque applied
+        torque = np.clip(action[0], -2.0, 2.0)
+        
+        # Calculate new custom reward
+        reward = -(angle_err**2 + 0.1 * th_dot**2 + 0.001 * torque**2)
+        
+        return obs, reward, terminated, truncated, info
 
 # ==========================================
-# 4. TRAINING LOOP
+# 4. OFFLINE EVALUATION FUNCTION
 # ==========================================
 
-def train(env_id="pendulum", num_steps=1000000, random_steps=10000):
-    env = get_env(env_id)
+def evaluate_policy(agent, target_angle, eval_episodes=20, seed=0):
+    """Runs isolated episodes purely for evaluation without exploration."""
+    eval_env = TargetPendulumWrapper(gym.make("Pendulum-v1", max_episode_steps=1000), target_angle)
+    max_action = float(eval_env.action_space.high[0])
+    
+    avg_reward = 0.
+    for ep in range(eval_episodes):
+        obs, _ = eval_env.reset(seed=seed + ep) # Unique seed per eval episode
+        done = False
+        while not done:
+            # Deterministic action selection (mean of Gaussian)
+            scaled_action = agent.select_action(obs, deterministic=True)
+            action = scaled_action * max_action
+            
+            obs, reward, terminated, truncated, _ = eval_env.step(action)
+            done = terminated or truncated
+            avg_reward += reward
+            
+    avg_reward /= eval_episodes
+    eval_env.close()
+    return avg_reward
+
+# ==========================================
+# 5. TRAINING LOOP
+# ==========================================
+
+def train_target_pendulum(target_angle, seed, num_steps=50000, random_steps=5000, eval_freq=5000):
+    set_seed(seed)
+    
+    base_env = gym.make("Pendulum-v1", max_episode_steps=1000)
+    env = TargetPendulumWrapper(base_env, target_angle)
+    
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     max_action = float(env.action_space.high[0]) 
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # gamma = 0.99 is set here as requested
+    device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
     agent = SACAgent(obs_dim, action_dim, device, gamma=0.99)
     replay_buffer = ReplayBuffer(obs_dim, action_dim, device=device)
     
-    obs, _ = env.reset()
-    episode_reward = 0
+    obs, _ = env.reset(seed=seed)
     
-    for step in range(num_steps):
-        # 10K STEPS RANDOM ACTION EXPLORATION PHASE
-        if step < random_steps:
+    # Store evaluation metrics: format [(step, mean_reward), ...]
+    eval_metrics = []
+    
+    for step in range(1, num_steps + 1):
+        if step <= random_steps:
             action = env.action_space.sample()
-            scaled_action = action / max_action # Normalize for the buffer
+            scaled_action = action / max_action
         else:
-            scaled_action = agent.select_action(obs)
+            scaled_action = agent.select_action(obs, deterministic=False)
             action = scaled_action * max_action 
             
         next_obs, reward, terminated, truncated, _ = env.step(action)
         done = terminated or truncated
         
-        # Add unsquashed/normalized action to buffer so critic processes [-1, 1]
         replay_buffer.add(obs, scaled_action, reward, next_obs, terminated)
-        
         obs = next_obs
-        episode_reward += reward
         
-        if step >= random_steps:
+        if step > random_steps:
             agent.update(replay_buffer)
             
         if done:
-            print(f"Step: {step+1} | Env: {env_id} | Reward: {episode_reward:.2f}")
             obs, _ = env.reset()
-            episode_reward = 0
+
+        # OFFLINE EVALUATION TRIGGER
+        if step % eval_freq == 0:
+            eval_reward = evaluate_policy(agent, target_angle, eval_episodes=20, seed=seed)
+            eval_metrics.append((step, eval_reward))
+            print(f"Angle: {target_angle}° | Seed: {seed:2d} | Step: {step:5d} | Eval Avg Return: {eval_reward:.2f}")
+
+    env.close()
+    return eval_metrics
+
+def run_seed_task(args):
+    """Helper function to unpack arguments for the parallel executor."""
+    angle, seed, total_steps, eval_freq = args
+    
+    # Run the existing training function
+    metrics = train_target_pendulum(
+        target_angle=angle, 
+        seed=seed, 
+        num_steps=total_steps, 
+        eval_freq=eval_freq
+    )
+    
+    return angle, seed, metrics
 
 if __name__ == "__main__":
-    # Choose environment: "pendulum", "lunar_lander", "reacher_easy", "reacher_hard"
-    print("Starting Training...")
-    train(env_id="lunar_lander")
+    # CRITICAL: Enforce 'spawn' context for PyTorch multiprocessing safety
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+        
+    target_angles = [0, -10, 30, -60, 90, -90, 120, -150]
+    num_seeds = 2
+    eval_freq = 5000 
+    total_steps = 50000 
+    
+    # Nested dictionary to aggregate logs
+    experiment_logs = {angle: {} for angle in target_angles}
+    
+    # 1. Prepare the list of all tasks (8 angles * 15 seeds = 120 tasks)
+    tasks = []
+    for angle in target_angles:
+        for seed in range(1, num_seeds + 1):
+            tasks.append((angle, seed, total_steps, eval_freq))
+            
+    # 2. Determine optimal worker count 
+    # Reserve 1 core for the OS. If using GPU, limit this so you don't OOM (Out of Memory).
+    # Since Pendulum is tiny, running entirely on CPU often works best for mass parallelism.
+    
+    # max_workers = min(mp.cpu_count() - 1, len(tasks))
+    max_workers = 8
+    
+    print(f"{'='*50}")
+    print(f"Starting Parallel SAC Evaluation")
+    print(f"Total Tasks: {len(tasks)} | Max Workers: {max_workers}")
+    print(f"{'='*50}\n")
+    
+    # 3. Execute tasks in parallel
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks to the pool
+        futures = [executor.submit(run_seed_task, task) for task in tasks]
+        
+        # As each task finishes, collect the results
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                angle, seed, metrics = future.result()
+                experiment_logs[angle][seed] = metrics
+                print(f"✅ Completed -> Target Angle: {angle:4d}° | Seed: {seed:2d}")
+            except Exception as exc:
+                print(f"❌ Task generated an exception: {exc}")
+                
+    print("\nAll parallel training completed successfully.")
+    
+    # Save the aggregated results to disk for plotting
+    np.save('sac_parallel_eval_results.npy', experiment_logs, allow_pickle=True)
