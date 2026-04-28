@@ -10,6 +10,16 @@ import gymnasium as gym
 import concurrent.futures
 import multiprocessing as mp
 
+# PREVENT THREAD OVERSUBSCRIPTION
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+torch.set_num_threads(1)
+
+
 def set_seed(seed):
     """Enforces reproducibility across all libraries."""
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -261,7 +271,7 @@ def evaluate_policy(agent, target_angle, eval_episodes=20, seed=0):
 # 5. TRAINING LOOP
 # ==========================================
 
-def train_target_pendulum(target_angle, seed, num_steps=50000, random_steps=5000, eval_freq=5000):
+def train_target_pendulum(target_angle, seed, num_steps=80000, random_steps=2000, eval_freq=5000):
     set_seed(seed)
     
     base_env = gym.make("Pendulum-v1", max_episode_steps=1000)
@@ -331,9 +341,9 @@ if __name__ == "__main__":
         pass
         
     target_angles = [0, -10, 30, -60, 90, -90, 120, -150]
-    num_seeds = 2
+    num_seeds = 15
     eval_freq = 5000 
-    total_steps = 50000 
+    total_steps = 80000 
     
     # Nested dictionary to aggregate logs
     experiment_logs = {angle: {} for angle in target_angles}
@@ -349,7 +359,7 @@ if __name__ == "__main__":
     # Since Pendulum is tiny, running entirely on CPU often works best for mass parallelism.
     
     # max_workers = min(mp.cpu_count() - 1, len(tasks))
-    max_workers = 8
+    max_workers = 15
     
     print(f"{'='*50}")
     print(f"Starting Parallel SAC Evaluation")
@@ -373,4 +383,4 @@ if __name__ == "__main__":
     print("\nAll parallel training completed successfully.")
     
     # Save the aggregated results to disk for plotting
-    np.save('sac_parallel_eval_results.npy', experiment_logs, allow_pickle=True)
+    np.save('sac_pendulum_automated_temp_tuning_eval_results.npy', experiment_logs, allow_pickle=True)
