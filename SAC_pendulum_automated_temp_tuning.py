@@ -109,10 +109,22 @@ class SquashedGaussianActor(nn.Module):
 # ==========================================
 
 class SACAgent:
-    def __init__(self, obs_dim, action_dim, device, gamma=0.99, tau=0.005, lr=3e-4):
+    def __init__(
+        self,
+        obs_dim,
+        action_dim,
+        device,
+        gamma=0.99,
+        tau=0.005,
+        lr=3e-4,
+        automatic_entropy_tuning=True,
+        fixed_alpha=None,
+    ):
         self.device = device
         self.gamma = gamma
         self.tau = tau
+        self.automatic_entropy_tuning = automatic_entropy_tuning
+        self.fixed_alpha = fixed_alpha
         
         ## Automated Temperature Tuning Setup
         self.target_entropy = -action_dim 
@@ -131,6 +143,8 @@ class SACAgent:
     @property
     def alpha(self):
         """Dynamically fetch the current temperature value"""
+        if not self.automatic_entropy_tuning:
+            return torch.tensor(float(self.fixed_alpha), device=self.device)
         return self.log_alpha.exp().detach()
     
     def select_action(self, obs, deterministic=False):
@@ -169,12 +183,13 @@ class SACAgent:
         actor_loss.backward()
         self.actor_optimizer.step()
 
-        ## TEMPERATURE UPDATE (Automated Tuning)
-        alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
+        if self.automatic_entropy_tuning:
+            ## TEMPERATURE UPDATE (Automated Tuning)
+            alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
 
-        self.alpha_optimizer.zero_grad()
-        alpha_loss.backward()
-        self.alpha_optimizer.step()
+            self.alpha_optimizer.zero_grad()
+            alpha_loss.backward()
+            self.alpha_optimizer.step()
 
 
         # SOFT UPDATE TARGET NETWORKS
