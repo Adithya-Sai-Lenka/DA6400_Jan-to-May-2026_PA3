@@ -1,0 +1,2 @@
+experiment,seed,status,command,started_order
+continuous-default,1,started,C:\Users\Robin\miniconda3\python.exe SAC_lunar_lander.py --train --seed 1 --total-steps 500000 --replay-capacity 100000 --eval-freq 5000 --log-dir logs_multiseed\run_20260501_170358 --eval-episodes 10,1

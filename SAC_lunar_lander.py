@@ -1,13 +1,22 @@
 import argparse
 import csv
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import gymnasium as gym
 import numpy as np
 import torch
 
 from SAC_pendulum_automated_temp_tuning import ReplayBuffer, SACAgent, set_seed
+
+torch.set_num_threads(1)
 
 
 @dataclass
@@ -80,6 +89,7 @@ def scale_action(action, action_space):
 
 def evaluate_policy(agent, cfg: LunarLanderConfig, eval_seed):
     eval_env = make_lunar_lander_env(cfg, continuous=True)
+    eval_env.action_space.seed(eval_seed)
     returns = []
 
     for ep in range(cfg.eval_episodes):
@@ -136,6 +146,7 @@ def make_csv_logger(cfg: LunarLanderConfig):
 def train_continuous_sac(cfg: LunarLanderConfig):
     set_seed(cfg.seed)
     env = make_lunar_lander_env(cfg, continuous=True)
+    env.action_space.seed(cfg.seed)
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -155,7 +166,10 @@ def train_continuous_sac(cfg: LunarLanderConfig):
     obs, _ = env.reset(seed=cfg.seed)
     eval_metrics = []
     log_path, log_file, csv_writer = make_csv_logger(cfg)
-    print(f"Writing evaluation log to: {log_path}")
+    print(
+        f"Experiment: {experiment_name(cfg)} | seed={cfg.seed} | "
+        f"total_steps={cfg.total_steps} | log={log_path}"
+    )
 
     try:
         for step in range(cfg.total_steps + 1):
@@ -217,7 +231,7 @@ def train_continuous_sac(cfg: LunarLanderConfig):
                 )
                 log_file.flush()
                 print(
-                    f"Step: {step:7d} | Eval Avg Return: {eval_return:8.2f} | "
+                    f"Seed: {cfg.seed:3d} | Step: {step:7d} | Eval Avg Return: {eval_return:8.2f} | "
                     f"Alpha: {alpha:.4f}"
                 )
     finally:
@@ -254,8 +268,10 @@ def parse_args():
     parser.add_argument("--train", action="store_true", help="Train continuous-action SAC.")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--total-steps", type=int, default=500_000)
+    parser.add_argument("--random-steps", type=int, default=10_000)
     parser.add_argument("--replay-capacity", type=int, default=100_000)
     parser.add_argument("--eval-freq", type=int, default=5_000)
+    parser.add_argument("--eval-episodes", type=int, default=10)
     parser.add_argument("--fixed-alpha", type=float, default=None)
     parser.add_argument("--hover-reward", type=float, default=None)
     parser.add_argument("--hover-switch-step", type=int, default=None)
@@ -270,8 +286,10 @@ if __name__ == "__main__":
     config = LunarLanderConfig(
         seed=args.seed,
         total_steps=args.total_steps,
+        random_steps=args.random_steps,
         replay_capacity=args.replay_capacity,
         eval_freq=args.eval_freq,
+        eval_episodes=args.eval_episodes,
         fixed_alpha=args.fixed_alpha,
         enable_wind=args.enable_wind,
         hover_reward=args.hover_reward,
@@ -284,4 +302,4 @@ if __name__ == "__main__":
         print_env_summary(config)
     if args.train:
         metrics = train_continuous_sac(config)
-        np.save(f"{experiment_name(config)}_eval_results.npy", metrics, allow_pickle=True)
+        np.save(Path(config.log_dir) / f"{experiment_name(config)}_eval_results.npy", metrics, allow_pickle=True)

@@ -35,6 +35,7 @@ class DiscreteLunarConfig:
     tau: float = 0.005
     lr: float = 3e-4
     hidden_dim: int = 256
+    grad_clip_norm: float | None = None
     target_entropy_ratio: float = 0.5
     min_alpha: float = 1e-4
     max_alpha: float = 1.0
@@ -206,6 +207,7 @@ class DQNAgent:
         self.device = device
         self.action_dim = action_dim
         self.gamma = cfg.gamma
+        self.grad_clip_norm = cfg.grad_clip_norm
         self.q = MLP(obs_dim, action_dim, cfg.hidden_dim).to(device)
         self.q_target = MLP(obs_dim, action_dim, cfg.hidden_dim).to(device)
         self.q_target.load_state_dict(self.q.state_dict())
@@ -227,6 +229,8 @@ class DQNAgent:
         loss = F.mse_loss(q, target)
         self.optimizer.zero_grad()
         loss.backward()
+        if self.grad_clip_norm is not None:
+            nn.utils.clip_grad_norm_(self.q.parameters(), self.grad_clip_norm)
         self.optimizer.step()
 
     def update_target(self):
@@ -244,6 +248,7 @@ def epsilon_at_step(step, cfg):
 
 def evaluate_agent(agent, cfg, eval_seed):
     env = make_env(cfg)
+    env.action_space.seed(eval_seed)
     returns = []
     for ep in range(cfg.eval_episodes):
         obs, _ = env.reset(seed=eval_seed + ep)
@@ -284,6 +289,8 @@ def make_csv_logger(cfg):
         "batch_size",
         "eval_freq",
         "eval_episodes",
+        "lr",
+        "grad_clip_norm",
         "target_entropy_ratio",
         "min_alpha",
         "max_alpha",
@@ -296,6 +303,7 @@ def make_csv_logger(cfg):
 def train(cfg):
     set_seed(cfg.seed)
     env = make_env(cfg)
+    env.action_space.seed(cfg.seed)
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -309,7 +317,10 @@ def train(cfg):
     obs, _ = env.reset(seed=cfg.seed)
     metrics = []
     log_path, log_file, writer = make_csv_logger(cfg)
-    print(f"Writing evaluation log to: {log_path}")
+    print(
+        f"Experiment: {experiment_name(cfg)} | seed={cfg.seed} | algo={cfg.algo} | "
+        f"total_steps={cfg.total_steps} | log={log_path}"
+    )
 
     try:
         for step in range(cfg.total_steps + 1):
@@ -351,6 +362,8 @@ def train(cfg):
                         "batch_size": cfg.batch_size,
                         "eval_freq": cfg.eval_freq,
                         "eval_episodes": cfg.eval_episodes,
+                        "lr": cfg.lr,
+                        "grad_clip_norm": "" if cfg.grad_clip_norm is None else cfg.grad_clip_norm,
                         "target_entropy_ratio": cfg.target_entropy_ratio,
                         "min_alpha": cfg.min_alpha,
                         "max_alpha": cfg.max_alpha,
@@ -358,14 +371,14 @@ def train(cfg):
                 )
                 log_file.flush()
                 print(
-                    f"Algo: {cfg.algo:12s} | Step: {step:7d} | "
+                    f"Seed: {cfg.seed:3d} | Algo: {cfg.algo:12s} | Step: {step:7d} | "
                     f"Eval Avg Return: {eval_return:8.2f}"
                 )
     finally:
         log_file.close()
         env.close()
 
-    np.save(f"{experiment_name(cfg)}_eval_results.npy", metrics, allow_pickle=True)
+    np.save(Path(cfg.log_dir) / f"{experiment_name(cfg)}_eval_results.npy", metrics, allow_pickle=True)
     return metrics
 
 
@@ -375,9 +388,12 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--total-steps", type=int, default=500_000)
     parser.add_argument("--random-steps", type=int, default=10_000)
-    parser.add_argument("--replay-capacity", type=int, default=100_0000)
+    parser.add_argument("--replay-capacity", type=int, default=100_000)
     parser.add_argument("--eval-freq", type=int, default=5_000)
     parser.add_argument("--eval-episodes", type=int, default=10)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--dqn-lr", type=float, default=1e-4)
+    parser.add_argument("--grad-clip-norm", type=float, default=10.0)
     parser.add_argument("--target-entropy-ratio", type=float, default=0.5)
     parser.add_argument("--min-alpha", type=float, default=1e-4)
     parser.add_argument("--max-alpha", type=float, default=1.0)
@@ -398,6 +414,8 @@ if __name__ == "__main__":
             replay_capacity=args.replay_capacity,
             eval_freq=args.eval_freq,
             eval_episodes=args.eval_episodes,
+            lr=args.dqn_lr if algo == "dqn" else args.lr,
+            grad_clip_norm=args.grad_clip_norm if algo == "dqn" else None,
             target_entropy_ratio=args.target_entropy_ratio,
             min_alpha=args.min_alpha,
             max_alpha=args.max_alpha,

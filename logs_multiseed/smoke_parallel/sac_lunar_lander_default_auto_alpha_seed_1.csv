@@ -1,0 +1,2 @@
+step,eval_avg_return,alpha,seed,total_steps,random_steps,replay_capacity,batch_size,eval_freq,eval_episodes,fixed_alpha,hover_reward_initial,hover_switch_step,hover_reward_after_switch,reward_phase
+0,-311.7608664166667,0.9997000694274902,1,0,0,100000,256,1,1,,,,-100.0,default
