@@ -2,3 +2,6 @@
 exploration.ipynb
 plots/
 *.npy
+rl_pa3/
+logs/
+__pycache__/
