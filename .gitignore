@@ -1,4 +1,7 @@
 .vscode
 exploration.ipynb
 plots/
+__pycache__/
 *.npy
+*.log
+logs*/
