@@ -1,4 +1,21 @@
-# render_ra.py
+# render.py
+'''
+```
+
+Run example:
+
+```bash
+python render_rc.py --reward_type rc --seed 0
+```
+
+This will create:
+
+```text
+logs/rc_seed_0_render.mp4
+```
+
+You can SCP/download the MP4 from the HPC and play locally.
+'''
 import os
 
 os.environ["MUJOCO_GL"] = "osmesa"
@@ -25,12 +42,16 @@ parser.add_argument(
     type=int,
     default=1000
 )
-
+parser.add_argument(
+    "--reward_type",
+    type=str,
+    required=True,
+    choices=["ra", "rb", "rc"]
+)
 args = parser.parse_args()
-
-
-reward_type = "rb"
-
+reward_type = args.reward_type
+args = parser.parse_args()
+# reward_type = "rc" # Change as required (ra/rb/rc)
 seed = args.seed
 
 
@@ -96,14 +117,23 @@ for step in range(args.steps):
 
     episode_return += reward
 
-    if done:
+    if done and "success_step" not in locals():
 
-        print(f"Episode finished at step {step}")
+        success_step = step
 
-        break
+        print(f"Success triggered at step {step}")
+
+    # Continue rendering 150 more steps after success
+    if "success_step" in locals():
+
+        if step >= success_step + 150:
+
+            print(f"Stopping render at step {step}")
+
+            break
 
 
-save_path = f"logs/rb_seed_{seed}_render.mp4"
+save_path = f"logs/{reward_type}_seed_{seed}_render.mp4"
 
 
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -126,25 +156,3 @@ video.release()
 
 print(f"Saved video to: {save_path}")
 print(f"Episode return: {episode_return}")
-'''
-```
-
-Run example:
-
-```bash
-python render_rb.py --seed 0
-```
-
-This will create:
-
-```text
-logs/rb_seed_0_render.mp4
-```
-
-You can SCP/download the MP4 from the HPC and play locally.
-
-Recommended:
-
-* render seed 0
-* render best-performing seed after inspecting curves.
-'''
