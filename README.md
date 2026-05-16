@@ -131,7 +131,77 @@ Notes:
 
 ## Reacher
 
+The Reacher implementation supports SAC training using:
+- `R_a` — dense shaping reward,
+- `R_b` — occupancy reward,
+- `R_c` — sparse reset-style reward.
+Main files:
+- `reacher_env.py` — environment and reward formulations,
+- `sac.py` — SAC implementation,
+- `replay_buffer.py` — replay buffer,
+- `train.py` — SAC training,
+- `run_parallel.py` — parallel multi-seed training,
+- `plot.py` — training curve generation,
+- `evaluate_behaviour.py` — behavioral evaluation,
+- `seed_wise_variation_episode_length.py` — `R_c` seed difficulty analysis,
+- `render.py` — policy rendering.
 
+Move into the reacher directory:
+```bash
+cd reacher
+```
+Single-seed training:
+```bash
+python train.py
+```
+Modify inside train.py for required reward for single seed training.
+```bash
+train(
+    reward_type="rb",
+    seed=0
+)
+```
+Parallel multi-seed training:
+Modify inside `run_parallel.py` for desired SAC-$R_i$ training where $i \in \{a,b,c\}$:
+```bash
+reward_type = "ra"
+```
+Run:
+```bash
+python run_parallel.py
+```
+Generate cross-evaluation plots:
+```bash
+python plot.py --train_reward a --eval_reward b
+```
+Arguments:
+
+--train_reward: a, b, c
+--eval_reward: a, b, c
+
+Behavioral evaluation:
+```bash
+python evaluate_behaviour.py
+```
+This generates:
+
+```text
+logs/steps_to_goal_bar.png
+logs/steps_in_target_bar.png
+```
+Analyze R_c exploration difficulty across seeds:
+```bash
+python seed_wise_variation_episode_length.py
+```
+Render trained policies:
+```bash
+python render.py --reward_type rc --seed 0
+```
+Supported Arguments:
+
+--reward_type: ra, rb, rc
+--seed: training seed
+--steps: rollout length (default: 1000)
 
 ## Bonus
 
@@ -148,5 +218,3 @@ After the experiments complete, generate visualizations with:
 ```bash
 python plot_pendulum_PEBBLE.py
 ```
-
-### Bonus Reacher Experiments
