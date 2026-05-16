@@ -218,3 +218,48 @@ After the experiments complete, generate visualizations with:
 ```bash
 python plot_pendulum_PEBBLE.py
 ```
+
+### Bonus Reacher experiments
+
+The PEBBLE-Reacher implementation performs preference-based reward learning using SAC on the DMControl Reacher environment.
+
+Required files:
+
+- `pebble_train.py` — PEBBLE training pipeline,
+- `reward_model.py` — learned reward network,
+- `preference_buffer.py` — preference storage,
+- `run_parallel_pebble.py` — multi-seed PEBBLE training,
+- `plot.py` — PEBBLE evaluation plots.
+- `pebble_utils.py` — segment sampling, teacher preferences, and reward-model loss.
+Move into the reacher directory:
+```bash
+cd reacher
+```
+Modify inside run_parallel_pebble.py for desired PEBBLE-SAC-$R_i$ training where $i \in {a,b,c}$:
+
+reward_type = "rb"
+
+Run multi-seed PEBBLE training:
+```bash
+python run_parallel_pebble.py
+```
+PEBBLE logs are saved as:
+
+logs/pebble_r*_seed_*.npy
+
+Before plotting, ensure plot.py loads PEBBLE logs:
+
+f"logs/pebble_{train_reward}_seed_{seed}.npy"
+
+Generate evaluation plots:
+
+python plot.py --train_reward b --eval_reward b
+
+Arguments:
+
+--train_reward: a, b, c
+--eval_reward: a, b, c
+
+Example output:
+
+logs/pebble_rb_eval_rb.png
