@@ -1,14 +1,12 @@
-# ============================================================
-# evaluate_behavior_parallel.py
-# ============================================================
+# evaluate_behavior.py
+# This script evaluates the behavior of the trained policies for RA, RB, and RC.
+# It runs multiple episodes for each seed and reward type, and computes statistics on
+# the steps required to reach the target and the time spent inside the target region.
 
 import os
-
 os.environ["MUJOCO_GL"] = "osmesa"
-
 import concurrent.futures
 import multiprocessing as mp
-
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -31,9 +29,8 @@ TARGET_THRESHOLDS = {
 }
 
 
-# ============================================================
-# distance computation
-# ============================================================
+# distance computation for r_a
+
 
 def get_distance(env):
 
@@ -49,10 +46,7 @@ def get_distance(env):
 
     return np.linalg.norm(fingertip - target)
 
-
-# ============================================================
 # worker function
-# ============================================================
 
 def evaluate_seed(args):
 
@@ -141,10 +135,7 @@ def evaluate_seed(args):
         )
     }
 
-
-# ============================================================
 # main
-# ============================================================
 
 if __name__ == "__main__":
 
@@ -218,9 +209,7 @@ if __name__ == "__main__":
                 out["target_steps"]
             )
 
-    # ========================================================
-    # aggregate
-    # ========================================================
+    # aggregate results
 
     final_stats = {}
 
@@ -243,11 +232,7 @@ if __name__ == "__main__":
             "target_std": target.std()
         }
 
-    # ========================================================
-    # print results
-    # ========================================================
-
-    print("\n===== FINAL RESULTS =====")
+    print("FINAL RESULTS")
 
     for rt in ["ra", "rb", "rc"]:
 
@@ -268,10 +253,6 @@ if __name__ == "__main__":
             f"+/- "
             f"{stats['target_std']:.2f}"
         )
-
-    # ========================================================
-    # plotting
-    # ========================================================
 
     labels = ["RA", "RB", "RC"]
 
@@ -299,10 +280,6 @@ if __name__ == "__main__":
         final_stats["rc"]["target_std"]
     ]
 
-    # --------------------------------------------------------
-    # steps to goal
-    # --------------------------------------------------------
-
     plt.figure(figsize=(7,5))
 
     plt.bar(
@@ -326,10 +303,6 @@ if __name__ == "__main__":
     )
 
     plt.close()
-
-    # --------------------------------------------------------
-    # steps in target
-    # --------------------------------------------------------
 
     plt.figure(figsize=(7,5))
 

@@ -1,6 +1,4 @@
-# ============================================================
 # run_parallel.py
-# ============================================================
 
 import concurrent.futures
 import multiprocessing as mp
@@ -30,16 +28,16 @@ if __name__ == "__main__":
 
         pass
 
-    reward_type = "rb"
+    reward_type = "ra" # Change as required (ra/rb/rc)
 
-    num_seeds = 15
+    num_seeds = 9
 
     tasks = [
         (reward_type, seed)
-        for seed in range(num_seeds)
+        for seed in range(6,15)
     ]
 
-    max_workers = 6
+    max_workers = 3
 
     print(f"Running {len(tasks)} seeds")
     print(f"Using {max_workers} workers")
