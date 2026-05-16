@@ -1,7 +1,7 @@
 .vscode
 exploration.ipynb
-plots/
 *.npy
 rl_pa3/
-logs*/
+logs/
 __pycache__/
+pebble/
